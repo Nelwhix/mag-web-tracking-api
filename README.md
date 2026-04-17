@@ -32,6 +32,27 @@ We implement **Daily Aggregation per Campaign** to provide fast access to tracki
 - **Normalization**: Timestamps are normalized to the start of the day (UTC) to group events correctly.
 - **Performance**: By computing aggregates on write (within the worker), we ensure that `GET /get-campaign/:id` remains fast even as event volume grows.
 
+## Event Schema
+
+To ensure high performance, reliable idempotency, and clear multi-tenant isolation, we use the following event payload schema:
+
+| Field | Type | Description | Required |
+|---|---|---|---|
+| `tenant_id` | `string` | Unique identifier for the tenant. | Yes |
+| `campaign_id` | `string` | Unique identifier for the specific campaign. | Yes |
+| `event_id` | `string` | A unique identifier for the event (ULID format recommended). | Yes |
+| `ip_address` | `string` | The IP address of the user who triggered the event. | Yes |
+| `user_agent` | `string` | The user agent of the browser that triggered the event. | Yes |
+| `timestamp` | `string` | ISO 8601 UTC timestamp of the event. | Yes |
+
+### Schema Adjustments & Reasoning
+
+The following adjustments were made to the initial payload requirements to ensure system robustness:
+
+1.  **Required `campaign_id`**: Although not explicitly required in the initial prompt, it is essential for the **Daily Aggregation per Campaign** requirement. Without a `campaign_id` in the payload, we cannot correctly attribute and aggregate events for tracking metrics.
+2.  **Required `event_id`**: This field was made mandatory to implement the **Idempotency Strategy**. A unique `event_id` allows the worker to perform a "check-and-set" operation, ensuring that SQS "at-least-once" delivery does not lead to duplicate data or corrupted aggregates.
+3.  **ULID Format for `event_id`**: We use Universally Unique Lexicographically Sortable Identifiers (ULID) for `event_id`. ULIDs provide both uniqueness (like UUIDs) and lexicographical sorting, which improves database indexing performance and makes events easier to trace chronologically.
+
 ## Getting Started
 
 ### Prerequisites
@@ -50,7 +71,7 @@ We implement **Daily Aggregation per Campaign** to provide fast access to tracki
    The seed script creates two tenants (Tenant A, Tenant B) and their respective admin/user accounts.
    ```bash
    docker compose run --rm app npx prisma migrate deploy # For global DB
-   docker compose run --rm app npm run seed
+   docker compose run --rm app npx prisma db seed
    ```
 
 ## Authentication & RBAC
@@ -94,13 +115,13 @@ Since campaigns are not seeded by default, you must create one first.
 *Note: Save the `data.id` (campaign_id) to use in the ingestion request.*
 
 #### 3. Ingestion (Public)
-Pass a unique event_id each time, duplicate event_ids are dropped. They are of ulid format, you can generate one here: https://ulidgenerator.com/
+Pass a unique event_id each time, duplicate event_ids are dropped. They are of ULID format, you can generate one here: https://ulidgenerator.com/
 **POST** `/ingest`
 ```json
 {
   "tenant_id": "01KPBHFE01ARJGFTMAWT7S31Z8",
   "campaign_id": "01KPBHFE01ARJGFTMAWT7S31Z9",
-  "event_id": "unique-uuid-123",
+  "event_id": "01ARZ3NDEKTSV4RRFFQ6KHNQEY",
   "ip_address": "127.0.0.1",
   "user_agent": "Mozilla/5.0...",
   "timestamp": "2026-04-17T15:19:00Z"

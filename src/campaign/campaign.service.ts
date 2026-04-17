@@ -20,11 +20,21 @@ export class CampaignService {
     }
 
     async findOne(prisma: TenantPrismaClient, id: string) {
-        return prisma.campaign.findUnique({
+        const campaign = await prisma.campaign.findUnique({
             where: { id },
             include: {
                 stats: true
             }
         });
+
+        if (!campaign) return null;
+
+        return {
+            ...campaign,
+            stats: campaign.stats.map(s => ({
+                date: s.date,
+                event_count: Number(s.event_count)
+            }))
+        };
     }
 }

@@ -21,8 +21,6 @@ services:
       context: .
       dockerfile: docker/node.dockerfile
     container_name: web-tracking-app
-    # For dev only, remove this before we push
-    command: npm run start:dev
     ports:
       - "3000:3000"
     volumes:

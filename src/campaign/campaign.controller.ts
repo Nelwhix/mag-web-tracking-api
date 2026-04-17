@@ -1,4 +1,15 @@
-import {Controller, Post, HttpCode, HttpStatus, Req, Body, UseGuards, Get, Param} from '@nestjs/common';
+import {
+    Controller,
+    Post,
+    HttpCode,
+    HttpStatus,
+    Req,
+    Body,
+    UseGuards,
+    Get,
+    Param,
+    NotFoundException
+} from '@nestjs/common';
 import type { Request } from 'express';
 import {ApiBearerAuth, ApiHeader, ApiTags} from "@nestjs/swagger";
 import {TenantContextService} from "../services/tenant-context.service";
@@ -50,6 +61,9 @@ export class CampaignController {
     async getCampaign(@Req() request: Request, @Param('id') id: string) {
         const prisma = await this.tenantContext.getTenantPrisma(request)
         const campaign = await this.campaignService.findOne(prisma, id)
+        if (! campaign) {
+            throw new NotFoundException('Campaign not found')
+        }
 
         return {
             data: campaign
