@@ -1,0 +1,56 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/tenant"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Campaign {
+  id   String @id @default(ulid())
+  name String
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  events Event[]
+  stats  CampaignDailyStats[]
+
+  @@map("campaigns")
+}
+
+model Event {
+  id          String   @id @default(ulid())
+  campaign_id String
+  campaign    Campaign @relation(fields: [campaign_id], references: [id])
+  payload     Json
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@map("events")
+}
+
+model CampaignDailyStats {
+  id          String   @id @default(ulid())
+  campaign_id String
+  campaign    Campaign @relation(fields: [campaign_id], references: [id])
+  date        DateTime
+  event_count BigInt   @default(0)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@unique([campaign_id, date])
+  @@map("campaign_daily_stats")
+}
+
+model User {
+  id         String   @id @default(ulid())
+  email      String   @unique
+  password   String
+  role       String
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@map("users")
+}
