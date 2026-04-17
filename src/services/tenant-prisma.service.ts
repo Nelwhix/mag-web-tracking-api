@@ -3,7 +3,7 @@ import { PrismaClient as TenantPrismaClient } from '../generated/tenant/client';
 import {Pool} from "pg";
 import {PrismaPg} from "@prisma/adapter-pg";
 
-@Injectable({ scope: Scope.REQUEST })
+@Injectable()
 export class TenantPrismaService {
     private static clients: Map<string, TenantPrismaClient> = new Map();
 

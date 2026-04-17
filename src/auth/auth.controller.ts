@@ -1,26 +1,29 @@
-import {Controller, Post, HttpCode, HttpStatus, Req, Body, UseInterceptors} from '@nestjs/common';
+import {Controller, Post, HttpCode, HttpStatus, Req, Body } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import {LoginDto} from "./dto/sign-in.dto";
 import type { Request } from 'express';
-import { PrismaClient as TenantPrismaClient } from '../generated/tenant/client';
-import {TenantInterceptor} from "../interceptors/tenant.interceptor";
 import {ApiHeader, ApiTags} from "@nestjs/swagger";
+import {TenantContextService} from "../services/tenant-context.service";
 
-interface TenantRequest extends Request {
-    tenantPrisma: TenantPrismaClient;
-}
-
-@Controller('api/v1/auth')
+@Controller()
 @ApiTags('Auth')
 @ApiHeader({
-    name: 'X-Tenant-ID',
+    name: 'x-tenant-id',
 })
 export class AuthController {
-    constructor(private readonly authService: AuthService) {}
+    constructor(
+        private readonly authService: AuthService,
+        private readonly tenantContext: TenantContextService
+    ) {}
 
     @HttpCode(HttpStatus.OK)
     @Post('login')
-    signIn(@Req() request: TenantRequest, @Body() loginDto: LoginDto) {
-        return this.authService.signIn(request.tenantPrisma, loginDto.email, loginDto.password);
+    async signIn(@Req() request: Request, @Body() loginDto: LoginDto) {
+        const prisma = await this.tenantContext.getTenantPrisma(request)
+        const userData = await this.authService.signIn(prisma, loginDto.email, loginDto.password)
+
+        return {
+            data: userData
+        };
     }
 }
