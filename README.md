@@ -1,98 +1,123 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Multi-Tenant Website Tracking Backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+## Architecture Overview
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+The system consists of:
+- **API Service**: Handles event ingestion and provides management APIs (Campaigns).
+- **Worker Service**: A background consumer that processes events from SQS.
+- **SQS (AWS)**: Acts as a buffer between ingestion and persistence, ensuring high availability and retry capabilities.
+- **PostgreSQL**: Stores tenant data with strict isolation.
+- **Global Database**: Manages tenant registration and database connection strings.
+- **Tenant Databases**: Each tenant has their own dedicated database for full data isolation.
 
-## Description
+## Multi-Tenant Strategy
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+We use a **Database-per-Tenant** strategy to ensure maximum isolation and security.
+- **Tenant Identification**: Tenants are identified by a unique `tenant_id`.
+- **Global Registry**: A global database maps `tenant_id` to its specific `database_url`.
+- **Dynamic Context**: For management APIs, the `x-tenant-id` header is used to switch the database context dynamically.
+- **Isolation**: Each tenant's data (Users, Campaigns, Events, Stats) resides in its own database, preventing any cross-tenant data leakage.
 
-## Project setup
+## Idempotency Strategy
 
-```bash
-$ npm install
+To handle SQS "at-least-once" delivery semantics and prevent duplicate data:
+1. **Unique Event ID**:  Each ingestion request should include a unique `event_id`.
+2. **Existence Check**: Before processing, the worker checks if the `event_id` already exists in the tenant's database.
+3. **Atomic Transactions**: Event creation and stats aggregation are wrapped in a single database transaction. If any part fails (e.g., duplicate `event_id` due to a race condition), the entire operation rolls back.
+
+## Aggregation Strategy
+
+We implement **Daily Aggregation per Campaign** to provide fast access to tracking metrics.
+- **Atomic Upserts**: We use Prisma's `upsert` with atomic `increment` operations.
+- **Normalization**: Timestamps are normalized to the start of the day (UTC) to group events correctly.
+- **Performance**: By computing aggregates on write (within the worker), we ensure that `GET /get-campaign/:id` remains fast even as event volume grows.
+
+## Getting Started
+
+### Prerequisites
+- Docker and Docker Compose
+
+### How to Run Locally
+
+1. **Clone the repository**
+2. **Configure environment variables**
+   Create a .env and attach the contents I sent via email
+3. **Start the infrastructure**
+   ```bash
+   docker compose up -d
+   ```
+4. **Seed the database**
+   The seed script creates two tenants (Tenant A, Tenant B) and their respective admin/user accounts.
+   ```bash
+   docker compose run --rm app npx prisma migrate deploy # For global DB
+   docker compose run --rm app npm run seed
+   ```
+
+## Authentication & RBAC
+
+The system supports two roles per tenant:
+- **`tenant-admin`**: Can create campaigns and view statistics.
+- **`tenant-user`**: Can view campaign statistics.
+
+Authentication is handled via JWT. Every request to protected endpoints must include:
+- `Authorization: Bearer <JWT_TOKEN>`
+- `x-tenant-id: <TENANT_ID>`
+
+## API Documentation
+
+Swagger UI is available at: `http://localhost:3000/api`
+
+### Example Requests
+
+#### 1. Auth (Login)
+**POST** `/login`  
+**Headers**: `x-tenant-id: 01KPBHFE01ARJGFTMAWT7S31Z8`
+```json
+{
+  "email": "admin@tenant_a.com",
+  "password": "password123"
+}
+```
+*Note: Use the `data.access_token` from the response for subsequent protected requests.*
+
+#### 2. Create Campaign (Protected)
+Since campaigns are not seeded by default, you must create one first.  
+**POST** `/create-campaign`  
+**Headers**: 
+- `Authorization: Bearer <JWT_TOKEN>`
+- `x-tenant-id: 01KPBHFE01ARJGFTMAWT7S31Z8`
+```json
+{
+  "name": "Spring Sale 2026"
+}
+```
+*Note: Save the `data.id` (campaign_id) to use in the ingestion request.*
+
+#### 3. Ingestion (Public)
+Pass a unique event_id each time, duplicate event_ids are dropped. They are of ulid format, you can generate one here: https://ulidgenerator.com/
+**POST** `/ingest`
+```json
+{
+  "tenant_id": "01KPBHFE01ARJGFTMAWT7S31Z8",
+  "campaign_id": "01KPBHFE01ARJGFTMAWT7S31Z9",
+  "event_id": "unique-uuid-123",
+  "ip_address": "127.0.0.1",
+  "user_agent": "Mozilla/5.0...",
+  "timestamp": "2026-04-17T15:19:00Z"
+}
 ```
 
-## Compile and run the project
+#### 4. List Campaigns (Protected)
+**GET** `/list-campaign`  
+**Headers**: 
+- `Authorization: Bearer <JWT_TOKEN>`
+- `x-tenant-id: 01KPBHFE01ARJGFTMAWT7S31Z8`
 
-```bash
-# development
-$ npm run start
+## Seeded Credentials
 
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
-```
-
-## Run tests
-
-```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
-```
-
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+| Tenant | User | Email | Password |
+|--------|------|-------|----------|
+| Tenant A | Admin | `admin@tenant_a.com` | `password123` |
+| Tenant A | User | `user@tenant_a.com` | `password123` |
+| Tenant B | Admin | `admin@tenant_b.com` | `password123` |
+| Tenant B | User | `user@tenant_b.com` | `password123` |
