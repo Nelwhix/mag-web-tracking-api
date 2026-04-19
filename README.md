@@ -61,13 +61,15 @@ The following adjustments were made to the initial payload requirements to ensur
 ### How to Run Locally
 
 1. **Clone the repository**
-2. **Configure environment variables**
+2. **Install dependencies locally (Recommended for IDE support)**
+   Run `npm install` on your host machine to ensure your IDE can resolve imports and provide autocomplete.
+3. **Configure environment variables**
    Create a .env and attach the contents I sent via email
-3. **Start the infrastructure**
+4. **Start the infrastructure**
    ```bash
    docker compose up -d
    ```
-4. **Seed the database**
+5. **Seed the database**
    The seed script creates two tenants (Tenant A, Tenant B) and their respective admin/user accounts.
    ```bash
    docker compose run --rm app npx prisma migrate deploy # For global DB
